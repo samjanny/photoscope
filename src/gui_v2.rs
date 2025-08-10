@@ -1,0 +1,565 @@
+use crate::file_manager::FileManager;
+use crate::image_analyzer::ImageAnalysis;
+use anyhow::Result;
+use eframe::egui;
+use egui::{Color32, ColorImage, Context, FontId, Frame, Margin, RichText, Rounding, Stroke, TextureHandle, Vec2, Visuals};
+use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+const MAX_TEXTURE_SIZE: u32 = 2048;
+
+// Colori del tema
+const BG_COLOR: Color32 = Color32::from_rgb(24, 26, 31);
+const CARD_BG: Color32 = Color32::from_rgb(32, 34, 41);
+const CARD_HOVER: Color32 = Color32::from_rgb(38, 40, 48);
+const ACCENT_BLUE: Color32 = Color32::from_rgb(59, 130, 246);
+const ACCENT_GREEN: Color32 = Color32::from_rgb(34, 197, 94);
+const ACCENT_ORANGE: Color32 = Color32::from_rgb(251, 146, 60);
+const DANGER_RED: Color32 = Color32::from_rgb(239, 68, 68);
+const TEXT_PRIMARY: Color32 = Color32::from_rgb(229, 231, 235);
+const TEXT_SECONDARY: Color32 = Color32::from_rgb(148, 163, 184);
+const GOLD_STAR: Color32 = Color32::from_rgb(250, 204, 21);
+
+#[derive(Clone)]
+enum AppState {
+    ShowingImages,
+    Loading(String),
+    ProcessingChoice(u8, PathBuf),
+}
+
+pub struct PhotoComparisonApp {
+    // Stato dell'app
+    state: AppState,
+    
+    // Tutte le coppie di file
+    all_pairs: Vec<(PathBuf, PathBuf)>,
+    current_index: usize,
+    
+    // Analisi correnti
+    current_analysis1: Option<ImageAnalysis>,
+    current_analysis2: Option<ImageAnalysis>,
+    texture1: Option<TextureHandle>,
+    texture2: Option<TextureHandle>,
+    
+    // File manager
+    file_manager: FileManager,
+    
+    // Thread communication
+    loading_message: Arc<Mutex<Option<String>>>,
+    next_data: Arc<Mutex<Option<(ImageAnalysis, ImageAnalysis, DynamicImage, DynamicImage)>>>,
+    
+    // Statistiche
+    selected_count: Arc<Mutex<usize>>,
+    skipped_count: Arc<Mutex<usize>>,
+    
+    // Flags
+    exit_program: bool,
+    auto_mode: bool,
+    
+    // UI state
+    hover_image1: bool,
+    hover_image2: bool,
+    animation_time: f32,
+}
+
+impl PhotoComparisonApp {
+    pub fn new(
+        pairs: Vec<(PathBuf, PathBuf)>,
+        file_manager: FileManager,
+        auto_mode: bool,
+    ) -> Self {
+        PhotoComparisonApp {
+            state: AppState::Loading("◌ Caricamento prima coppia...".to_string()),
+            all_pairs: pairs,
+            current_index: 0,
+            current_analysis1: None,
+            current_analysis2: None,
+            texture1: None,
+            texture2: None,
+            file_manager,
+            loading_message: Arc::new(Mutex::new(None)),
+            next_data: Arc::new(Mutex::new(None)),
+            selected_count: Arc::new(Mutex::new(0)),
+            skipped_count: Arc::new(Mutex::new(0)),
+            exit_program: false,
+            auto_mode,
+            hover_image1: false,
+            hover_image2: false,
+            animation_time: 0.0,
+        }
+    }
+    
+    pub fn run(mut self) -> Result<(usize, usize)> {
+        let final_selected = self.selected_count.clone();
+        let final_skipped = self.skipped_count.clone();
+        
+        if !self.all_pairs.is_empty() {
+            self.load_current_pair();
+        }
+        
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_maximized(true)
+                .with_title("PhotoScope Pro - Image Comparison Tool")
+                .with_icon(Self::create_icon()),
+            ..Default::default()
+        };
+        
+        eframe::run_simple_native("PhotoScope Pro", options, move |ctx, _frame| {
+            self.setup_custom_style(ctx);
+            self.update(ctx);
+            
+            if self.exit_program {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }).map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+        
+        Ok((*final_selected.lock().unwrap(), *final_skipped.lock().unwrap()))
+    }
+    
+    fn create_icon() -> egui::IconData {
+        egui::IconData {
+            rgba: vec![0; 32 * 32 * 4],
+            width: 32,
+            height: 32,
+        }
+    }
+    
+    fn setup_custom_style(&self, ctx: &Context) {
+        let mut style = (*ctx.style()).clone();
+        
+        // Font sizes
+        style.text_styles.insert(
+            egui::TextStyle::Heading,
+            FontId::proportional(24.0),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Body,
+            FontId::proportional(16.0),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Button,
+            FontId::proportional(18.0),
+        );
+        
+        // Spacing
+        style.spacing.item_spacing = Vec2::new(12.0, 8.0);
+        style.spacing.button_padding = Vec2::new(16.0, 10.0);
+        style.spacing.indent = 20.0;
+        
+        // Visual tweaks
+        style.visuals = Visuals::dark();
+        style.visuals.window_fill = BG_COLOR;
+        style.visuals.panel_fill = BG_COLOR;
+        style.visuals.extreme_bg_color = CARD_BG;
+        style.visuals.widgets.noninteractive.bg_fill = CARD_BG;
+        style.visuals.widgets.inactive.bg_fill = CARD_BG;
+        style.visuals.widgets.hovered.bg_fill = CARD_HOVER;
+        style.visuals.widgets.active.bg_fill = ACCENT_BLUE;
+        style.visuals.selection.bg_fill = ACCENT_BLUE;
+        style.visuals.window_shadow = egui::epaint::Shadow {
+            offset: Vec2::new(0.0, 4.0),
+            blur: 8.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(48),
+        };
+        style.visuals.popup_shadow = egui::epaint::Shadow {
+            offset: Vec2::new(0.0, 2.0),
+            blur: 6.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(48),
+        };
+        style.visuals.window_rounding = Rounding::same(12.0);
+        style.visuals.widgets.noninteractive.rounding = Rounding::same(8.0);
+        
+        ctx.set_style(style);
+    }
+    
+    fn update(&mut self, ctx: &Context) {
+        self.animation_time += ctx.input(|i| i.unstable_dt);
+        
+        // Controlla se ci sono nuovi dati dal thread
+        if let Some((analysis1, analysis2, img1, img2)) = self.next_data.lock().unwrap().take() {
+            self.current_analysis1 = Some(analysis1);
+            self.current_analysis2 = Some(analysis2);
+            self.texture1 = self.image_to_texture(ctx, img1, "img1");
+            self.texture2 = self.image_to_texture(ctx, img2, "img2");
+            self.state = AppState::ShowingImages;
+        }
+        
+        match self.state.clone() {
+            AppState::Loading(msg) => {
+                self.show_loading_ui(ctx, &msg);
+            }
+            AppState::ShowingImages => {
+                self.show_comparison_ui(ctx);
+            }
+            AppState::ProcessingChoice(choice, path) => {
+                self.process_choice(choice, path);
+                self.show_loading_ui(ctx, "◉ Elaborazione scelta...");
+            }
+        }
+        
+        if matches!(self.state, AppState::Loading(_) | AppState::ProcessingChoice(_, _)) {
+            ctx.request_repaint();
+        }
+    }
+    
+    fn show_comparison_ui(&mut self, ctx: &Context) {
+        // Header principale compatto
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.add_space(3.0);
+            self.show_modern_header(ui);
+            ui.add_space(3.0);
+        });
+        
+        // Footer con controlli compatto
+        egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
+            ui.add_space(3.0);
+            self.show_modern_controls(ui);
+            ui.add_space(3.0);
+        });
+        
+        // Area principale con immagini
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.show_modern_images(ui);
+        });
+        
+        self.handle_keyboard_input(ctx);
+    }
+    
+    fn show_modern_header(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // Titolo compatto
+            ui.label(RichText::new("PhotoScope Pro").size(18.0).color(TEXT_PRIMARY).strong());
+            ui.separator();
+            
+            // Progress inline
+            let progress = (self.current_index as f32) / (self.all_pairs.len() as f32);
+            ui.add(egui::ProgressBar::new(progress)
+                .desired_width(200.0)
+                .text(format!("{}/{}", self.current_index + 1, self.all_pairs.len())));
+            
+            ui.separator();
+            
+            // Stats compatti
+            ui.label(RichText::new(format!("✓ {} | → {} | Total: {}",
+                *self.selected_count.lock().unwrap(),
+                *self.skipped_count.lock().unwrap(),
+                self.all_pairs.len())).size(14.0).color(TEXT_SECONDARY));
+        });
+    }
+    
+    fn show_modern_images(&mut self, ui: &mut egui::Ui) {
+        let available_width = ui.available_width();
+        let card_width = (available_width / 2.0) - 30.0;
+        
+        let (analysis1, analysis2, texture1, texture2) = match (&self.current_analysis1, &self.current_analysis2) {
+            (Some(a1), Some(a2)) => (a1.clone(), a2.clone(), self.texture1.clone(), self.texture2.clone()),
+            _ => return,
+        };
+        
+        let quality_1_better = analysis1.quality_score >= analysis2.quality_score;
+        let quality_2_better = analysis2.quality_score > analysis1.quality_score;
+        let hover1 = self.hover_image1;
+        let hover2 = self.hover_image2;
+        
+        ui.horizontal(|ui| {
+            ui.add_space(15.0);
+            
+            // Immagine 1
+            self.show_image_card(ui, 1, analysis1, texture1, card_width, 
+                hover1, quality_1_better);
+            
+            ui.add_space(20.0);
+            
+            // Immagine 2
+            self.show_image_card(ui, 2, analysis2, texture2, card_width,
+                hover2, quality_2_better);
+        });
+    }
+    
+    fn show_image_card(&mut self, ui: &mut egui::Ui, 
+                       num: u8, 
+                       analysis: ImageAnalysis, 
+                       texture: Option<TextureHandle>,
+                       width: f32,
+                       is_hovered: bool,
+                       is_best: bool) {
+        ui.vertical(|ui| {
+            ui.set_max_width(width);
+            
+            // Card container
+            let card_bg = if is_hovered { CARD_HOVER } else { CARD_BG };
+            Frame::none()
+                .fill(card_bg)
+                .rounding(Rounding::same(12.0))
+                .stroke(if is_best { 
+                    Stroke::new(2.0, ACCENT_GREEN)
+                } else { 
+                    Stroke::new(1.0, Color32::from_gray(50))
+                })
+                .shadow(egui::epaint::Shadow {
+                    offset: Vec2::new(0.0, if is_hovered { 4.0 } else { 2.0 }),
+                    blur: if is_hovered { 12.0 } else { 4.0 },
+                    spread: 0.0,
+                    color: Color32::from_black_alpha(60),
+                })
+                .inner_margin(Margin::same(16.0))
+                .show(ui, |ui| {
+                    // Header minimo della card
+                    ui.horizontal(|ui| {
+                        let color = if num == 1 { ACCENT_BLUE } else { ACCENT_ORANGE };
+                        ui.label(RichText::new(format!("[{}] {}", num,
+                            Path::new(&analysis.file_path)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()))
+                            .size(14.0)
+                            .color(color));
+                        
+                        if is_best {
+                            ui.label(RichText::new(" ★ MIGLIORE").color(ACCENT_GREEN).strong());
+                        }
+                    });
+                    
+                    // Info compatte su una riga
+                    ui.label(RichText::new(format!("{:.1}MP | {:.1}MB | {} {}",
+                        analysis.megapixels,
+                        analysis.file_size_mb,
+                        analysis.get_quality_stars(),
+                        if analysis.metadata_count > 0 { format!("| {} meta", analysis.metadata_count) } else { String::new() }
+                    )).size(12.0).color(TEXT_SECONDARY));
+                    
+                    ui.add_space(4.0);
+                    
+                    // Area immagine
+                    Frame::none()
+                        .fill(Color32::from_gray(20))
+                        .rounding(Rounding::same(8.0))
+                        .inner_margin(Margin::same(4.0))
+                        .show(ui, |ui| {
+                            let available_height = ui.available_height();
+                            let available_width = ui.available_width();
+                            
+                            if let Some(texture) = texture {
+                                let size = texture.size_vec2();
+                                let scale_x = available_width / size.x;
+                                let scale_y = available_height / size.y;
+                                let scale = scale_x.min(scale_y);
+                                let scaled_size = Vec2::new(size.x * scale, size.y * scale);
+                                
+                                ui.centered_and_justified(|ui| {
+                                    let response = ui.image((texture.id(), scaled_size));
+                                    
+                                    if num == 1 {
+                                        self.hover_image1 = response.hovered();
+                                    } else {
+                                        self.hover_image2 = response.hovered();
+                                    }
+                                });
+                            } else {
+                                ui.centered_and_justified(|ui| {
+                                    ui.spinner();
+                                });
+                            }
+                        });
+                });
+        });
+    }
+    
+    
+    fn show_modern_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // Pulsanti principali compatti
+            let btn_size = Vec2::new(120.0, 35.0);
+            
+            if self.modern_button(ui, "❶ Scegli Prima", ACCENT_BLUE, btn_size) {
+                self.make_choice(1);
+            }
+            
+            if self.modern_button(ui, "❷ Scegli Seconda", ACCENT_ORANGE, btn_size) {
+                self.make_choice(2);
+            }
+            
+            if self.modern_button(ui, "⟫ Salta", TEXT_SECONDARY, btn_size) {
+                self.skip_current();
+            }
+            
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.modern_button(ui, "✕ Esci", DANGER_RED, btn_size) {
+                    self.exit_program = true;
+                }
+                
+                // Shortcuts help compatto
+                ui.label(RichText::new("⌨ 1, 2, S, ESC").size(12.0).color(TEXT_SECONDARY));
+            });
+        });
+    }
+    
+    fn modern_button(&self, ui: &mut egui::Ui, text: &str, color: Color32, size: Vec2) -> bool {
+        let button = egui::Button::new(RichText::new(text).size(18.0))
+            .min_size(size)
+            .fill(color.gamma_multiply(0.2))
+            .stroke(Stroke::new(1.0, color));
+        
+        let response = ui.add(button);
+        
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        
+        response.clicked()
+    }
+    
+    fn show_loading_ui(&self, ctx: &Context, message: &str) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                let available_height = ui.available_height();
+                ui.add_space(available_height / 2.0 - 100.0);
+                
+                // Animated spinner
+                ui.spinner();
+                ui.add_space(30.0);
+                
+                ui.heading(RichText::new(message).size(24.0).color(TEXT_PRIMARY));
+                
+                ui.add_space(20.0);
+                
+                // Progress info
+                Frame::none()
+                    .fill(CARD_BG)
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(20.0, 12.0))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(format!("▫ File {}/{}", 
+                            self.current_index + 1, self.all_pairs.len()))
+                            .size(18.0)
+                            .color(TEXT_SECONDARY));
+                    });
+            });
+        });
+    }
+    
+    fn handle_keyboard_input(&mut self, ctx: &Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+            self.make_choice(1);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
+            self.make_choice(2);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+            self.skip_current();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.exit_program = true;
+        }
+    }
+    
+    fn make_choice(&mut self, choice: u8) {
+        if let Some((path1, path2)) = self.all_pairs.get(self.current_index) {
+            let path = if choice == 1 { path1.clone() } else { path2.clone() };
+            self.state = AppState::ProcessingChoice(choice, path);
+        }
+    }
+    
+    fn skip_current(&mut self) {
+        *self.skipped_count.lock().unwrap() += 1;
+        self.move_to_next();
+    }
+    
+    fn process_choice(&mut self, _choice: u8, path: PathBuf) {
+        let file_manager = self.file_manager.clone();
+        let next_data = self.next_data.clone();
+        let pairs = self.all_pairs.clone();
+        let next_index = self.current_index + 1;
+        
+        thread::spawn(move || {
+            if let Ok(_dest) = file_manager.copy_to_output(&path) {
+                // Successo copia
+            }
+            
+            if next_index < pairs.len() {
+                let (path1, path2) = &pairs[next_index];
+                if let (Ok(a1), Ok(a2)) = (
+                    ImageAnalysis::analyze_image(path1),
+                    ImageAnalysis::analyze_image(path2)
+                ) {
+                    if let (Ok(img1), Ok(img2)) = (
+                        Self::load_and_resize_image(path1),
+                        Self::load_and_resize_image(path2)
+                    ) {
+                        *next_data.lock().unwrap() = Some((a1, a2, img1, img2));
+                    }
+                }
+            }
+        });
+        
+        *self.selected_count.lock().unwrap() += 1;
+        self.state = AppState::Loading("◌ Preparazione prossima coppia...".to_string());
+        self.move_to_next();
+    }
+    
+    fn move_to_next(&mut self) {
+        self.current_index += 1;
+        
+        if self.current_index >= self.all_pairs.len() {
+            self.exit_program = true;
+            return;
+        }
+        
+        if matches!(self.state, AppState::ShowingImages) {
+            self.state = AppState::Loading("◌ Caricamento...".to_string());
+            self.load_current_pair();
+        }
+    }
+    
+    fn load_current_pair(&mut self) {
+        if let Some((path1, path2)) = self.all_pairs.get(self.current_index) {
+            let path1 = path1.clone();
+            let path2 = path2.clone();
+            let next_data = self.next_data.clone();
+            
+            thread::spawn(move || {
+                if let (Ok(a1), Ok(a2)) = (
+                    ImageAnalysis::analyze_image(&path1),
+                    ImageAnalysis::analyze_image(&path2)
+                ) {
+                    if let (Ok(img1), Ok(img2)) = (
+                        Self::load_and_resize_image(&path1),
+                        Self::load_and_resize_image(&path2)
+                    ) {
+                        *next_data.lock().unwrap() = Some((a1, a2, img1, img2));
+                    }
+                }
+            });
+        }
+    }
+    
+    fn load_and_resize_image(path: &Path) -> Result<DynamicImage> {
+        let mut img = image::open(path)?;
+        let (width, height) = img.dimensions();
+        if width > MAX_TEXTURE_SIZE || height > MAX_TEXTURE_SIZE {
+            let ratio = (MAX_TEXTURE_SIZE as f32 / width.max(height) as f32).min(1.0);
+            let new_width = (width as f32 * ratio) as u32;
+            let new_height = (height as f32 * ratio) as u32;
+            img = img.resize(new_width, new_height, FilterType::Lanczos3);
+        }
+        Ok(img)
+    }
+    
+    fn image_to_texture(&self, ctx: &Context, img: DynamicImage, name: &str) -> Option<TextureHandle> {
+        let size = [img.width() as usize, img.height() as usize];
+        let img_rgba = img.to_rgba8();
+        let pixels = img_rgba.as_flat_samples();
+        let color_image = ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+        
+        Some(ctx.load_texture(
+            name,
+            color_image,
+            egui::TextureOptions::default()
+        ))
+    }
+}
