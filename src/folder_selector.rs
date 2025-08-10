@@ -34,7 +34,7 @@ impl FolderSelectorApp {
     pub fn run(mut self) -> Result<Option<(PathBuf, PathBuf)>> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([900.0, 600.0])
+                .with_inner_size([900.0, 750.0])
                 .with_title("PhotoScope Pro - Setup"),
             ..Default::default()
         };
@@ -221,13 +221,18 @@ impl FolderSelectorApp {
     
     fn show_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let both_selected = self.folder1.is_some() && self.folder2.is_some();
+        let same_folder = if let (Some(f1), Some(f2)) = (&self.folder1, &self.folder2) {
+            f1 == f2
+        } else {
+            false
+        };
         
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - 320.0) / 2.0);
             
             // Start button
-            ui.add_enabled_ui(both_selected, |ui| {
-                let btn_color = if both_selected { ACCENT_GREEN } else { Color32::from_gray(80) };
+            ui.add_enabled_ui(both_selected && !same_folder, |ui| {
+                let btn_color = if both_selected && !same_folder { ACCENT_GREEN } else { Color32::from_gray(80) };
                 if self.modern_button(ui, &format!("{} Avvia Confronto", regular::PLAY), btn_color, Vec2::new(150.0, 45.0)) {
                     self.folders_selected = true;
                 }
@@ -241,17 +246,24 @@ impl FolderSelectorApp {
             }
         });
         
-        if !both_selected {
+        // Show error message only when same folder is selected
+        if same_folder {
             ui.add_space(20.0);
+            
             Frame::NONE
-                .fill(WARNING_YELLOW.gamma_multiply(0.2))
+                .fill(DANGER_RED.gamma_multiply(0.2))
                 .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::symmetric(16, 8))
+                .inner_margin(Margin::symmetric(16, 12))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(regular::WARNING.to_string()).color(WARNING_YELLOW).size(20.0));
-                        ui.label(RichText::new("Seleziona entrambe le cartelle per continuare")
-                            .color(WARNING_YELLOW));
+                    ui.set_min_width(ui.available_width());
+                    ui.vertical_centered(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(regular::WARNING.to_string()).color(DANGER_RED).size(20.0));
+                            ui.add_space(8.0);
+                            ui.label(RichText::new("Non puoi selezionare la stessa cartella due volte")
+                                .color(DANGER_RED)
+                                .size(16.0));
+                        });
                     });
                 });
         }
