@@ -2,7 +2,8 @@ use crate::file_manager::FileManager;
 use crate::image_analyzer::ImageAnalysis;
 use anyhow::Result;
 use eframe::egui;
-use egui::{Color32, ColorImage, Context, FontId, Frame, Margin, RichText, Rounding, Stroke, TextureHandle, Vec2, Visuals};
+use egui::{Color32, ColorImage, Context, FontId, Frame, Margin, RichText, CornerRadius, Stroke, TextureHandle, Vec2, Visuals};
+use egui_phosphor::regular;
 use image::{DynamicImage, GenericImageView, imageops::FilterType};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -56,7 +57,6 @@ pub struct PhotoComparisonApp {
     
     // Flags
     exit_program: bool,
-    auto_mode: bool,
     
     // UI state
     hover_image1: bool,
@@ -68,10 +68,9 @@ impl PhotoComparisonApp {
     pub fn new(
         pairs: Vec<(PathBuf, PathBuf)>,
         file_manager: FileManager,
-        auto_mode: bool,
     ) -> Self {
         PhotoComparisonApp {
-            state: AppState::Loading("◌ Caricamento prima coppia...".to_string()),
+            state: AppState::Loading("Caricamento prima coppia...".to_string()),
             all_pairs: pairs,
             current_index: 0,
             current_analysis1: None,
@@ -84,7 +83,6 @@ impl PhotoComparisonApp {
             selected_count: Arc::new(Mutex::new(0)),
             skipped_count: Arc::new(Mutex::new(0)),
             exit_program: false,
-            auto_mode,
             hover_image1: false,
             hover_image2: false,
             animation_time: 0.0,
@@ -128,6 +126,11 @@ impl PhotoComparisonApp {
     }
     
     fn setup_custom_style(&self, ctx: &Context) {
+        // Initialize Phosphor fonts
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        ctx.set_fonts(fonts);
+        
         let mut style = (*ctx.style()).clone();
         
         // Font sizes
@@ -160,19 +163,18 @@ impl PhotoComparisonApp {
         style.visuals.widgets.active.bg_fill = ACCENT_BLUE;
         style.visuals.selection.bg_fill = ACCENT_BLUE;
         style.visuals.window_shadow = egui::epaint::Shadow {
-            offset: Vec2::new(0.0, 4.0),
-            blur: 8.0,
-            spread: 0.0,
+            offset: [0, 4],
+            blur: 8,
+            spread: 0,
             color: Color32::from_black_alpha(48),
         };
         style.visuals.popup_shadow = egui::epaint::Shadow {
-            offset: Vec2::new(0.0, 2.0),
-            blur: 6.0,
-            spread: 0.0,
+            offset: [0, 2],
+            blur: 6,
+            spread: 0,
             color: Color32::from_black_alpha(48),
         };
-        style.visuals.window_rounding = Rounding::same(12.0);
-        style.visuals.widgets.noninteractive.rounding = Rounding::same(8.0);
+        // Window rounding and widget rounding are handled differently in egui 0.32
         
         ctx.set_style(style);
     }
@@ -198,7 +200,7 @@ impl PhotoComparisonApp {
             }
             AppState::ProcessingChoice(choice, path) => {
                 self.process_choice(choice, path);
-                self.show_loading_ui(ctx, "◉ Elaborazione scelta...");
+                self.show_loading_ui(ctx, "Elaborazione scelta...");
             }
         }
         
@@ -245,8 +247,10 @@ impl PhotoComparisonApp {
             ui.separator();
             
             // Stats compatti
-            ui.label(RichText::new(format!("✓ {} | → {} | Total: {}",
+            ui.label(RichText::new(format!("{} {} | {} {} | Total: {}",
+                regular::CHECK,
                 *self.selected_count.lock().unwrap(),
+                regular::ARROW_RIGHT,
                 *self.skipped_count.lock().unwrap(),
                 self.all_pairs.len())).size(14.0).color(TEXT_SECONDARY));
         });
@@ -293,21 +297,21 @@ impl PhotoComparisonApp {
             
             // Card container
             let card_bg = if is_hovered { CARD_HOVER } else { CARD_BG };
-            Frame::none()
+            Frame::NONE
                 .fill(card_bg)
-                .rounding(Rounding::same(12.0))
+                .corner_radius(CornerRadius::same(12))
                 .stroke(if is_best { 
                     Stroke::new(2.0, ACCENT_GREEN)
                 } else { 
                     Stroke::new(1.0, Color32::from_gray(50))
                 })
                 .shadow(egui::epaint::Shadow {
-                    offset: Vec2::new(0.0, if is_hovered { 4.0 } else { 2.0 }),
-                    blur: if is_hovered { 12.0 } else { 4.0 },
-                    spread: 0.0,
+                    offset: [0, if is_hovered { 4 } else { 2 }],
+                    blur: if is_hovered { 12 } else { 4 },
+                    spread: 0,
                     color: Color32::from_black_alpha(60),
                 })
-                .inner_margin(Margin::same(16.0))
+                .inner_margin(Margin::same(16))
                 .show(ui, |ui| {
                     // Header minimo della card
                     ui.horizontal(|ui| {
@@ -321,7 +325,7 @@ impl PhotoComparisonApp {
                             .color(color));
                         
                         if is_best {
-                            ui.label(RichText::new(" ★ MIGLIORE").color(ACCENT_GREEN).strong());
+                            ui.label(RichText::new(format!(" {} MIGLIORE", regular::STAR)).color(ACCENT_GREEN).strong());
                         }
                     });
                     
@@ -336,22 +340,31 @@ impl PhotoComparisonApp {
                     ui.add_space(4.0);
                     
                     // Area immagine
-                    Frame::none()
+                    let image_height = 600.0; // Fixed height for consistent display
+                    let image_width = width - 20.0;
+                    
+                    Frame::NONE
                         .fill(Color32::from_gray(20))
-                        .rounding(Rounding::same(8.0))
-                        .inner_margin(Margin::same(4.0))
+                        .corner_radius(CornerRadius::same(8))
+                        .inner_margin(Margin::same(8))
                         .show(ui, |ui| {
-                            let available_height = ui.available_height();
-                            let available_width = ui.available_width();
+                            ui.set_min_height(image_height);
+                            ui.set_min_width(image_width);
                             
                             if let Some(texture) = texture {
                                 let size = texture.size_vec2();
-                                let scale_x = available_width / size.x;
-                                let scale_y = available_height / size.y;
+                                let scale_x = image_width / size.x;
+                                let scale_y = image_height / size.y;
                                 let scale = scale_x.min(scale_y);
                                 let scaled_size = Vec2::new(size.x * scale, size.y * scale);
                                 
-                                ui.centered_and_justified(|ui| {
+                                // Centra l'immagine nell'area disponibile
+                                let x_offset = (image_width - scaled_size.x) / 2.0;
+                                let y_offset = (image_height - scaled_size.y) / 2.0;
+                                
+                                ui.add_space(y_offset.max(0.0));
+                                ui.horizontal(|ui| {
+                                    ui.add_space(x_offset.max(0.0));
                                     let response = ui.image((texture.id(), scaled_size));
                                     
                                     if num == 1 {
@@ -361,7 +374,10 @@ impl PhotoComparisonApp {
                                     }
                                 });
                             } else {
-                                ui.centered_and_justified(|ui| {
+                                // Mostra spinner centrato
+                                ui.add_space(image_height / 2.0 - 20.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(image_width / 2.0 - 20.0);
                                     ui.spinner();
                                 });
                             }
@@ -376,25 +392,25 @@ impl PhotoComparisonApp {
             // Pulsanti principali compatti
             let btn_size = Vec2::new(120.0, 35.0);
             
-            if self.modern_button(ui, "❶ Scegli Prima", ACCENT_BLUE, btn_size) {
+            if self.modern_button(ui, &format!("{} Scegli Prima", regular::NUMBER_CIRCLE_ONE), ACCENT_BLUE, btn_size) {
                 self.make_choice(1);
             }
             
-            if self.modern_button(ui, "❷ Scegli Seconda", ACCENT_ORANGE, btn_size) {
+            if self.modern_button(ui, &format!("{} Scegli Seconda", regular::NUMBER_CIRCLE_TWO), ACCENT_ORANGE, btn_size) {
                 self.make_choice(2);
             }
             
-            if self.modern_button(ui, "⟫ Salta", TEXT_SECONDARY, btn_size) {
+            if self.modern_button(ui, &format!("{} Salta", regular::SKIP_FORWARD), TEXT_SECONDARY, btn_size) {
                 self.skip_current();
             }
             
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.modern_button(ui, "✕ Esci", DANGER_RED, btn_size) {
+                if self.modern_button(ui, &format!("{} Esci", regular::X), DANGER_RED, btn_size) {
                     self.exit_program = true;
                 }
                 
                 // Shortcuts help compatto
-                ui.label(RichText::new("⌨ 1, 2, S, ESC").size(12.0).color(TEXT_SECONDARY));
+                ui.label(RichText::new(format!("{} 1, 2, S, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
             });
         });
     }
@@ -429,12 +445,12 @@ impl PhotoComparisonApp {
                 ui.add_space(20.0);
                 
                 // Progress info
-                Frame::none()
+                Frame::NONE
                     .fill(CARD_BG)
-                    .rounding(Rounding::same(8.0))
-                    .inner_margin(Margin::symmetric(20.0, 12.0))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(20, 12))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("▫ File {}/{}", 
+                        ui.label(RichText::new(format!("{} File {}/{}", regular::FILE, 
                             self.current_index + 1, self.all_pairs.len()))
                             .size(18.0)
                             .color(TEXT_SECONDARY));
@@ -498,7 +514,7 @@ impl PhotoComparisonApp {
         });
         
         *self.selected_count.lock().unwrap() += 1;
-        self.state = AppState::Loading("◌ Preparazione prossima coppia...".to_string());
+        self.state = AppState::Loading("Preparazione prossima coppia...".to_string());
         self.move_to_next();
     }
     
@@ -511,7 +527,7 @@ impl PhotoComparisonApp {
         }
         
         if matches!(self.state, AppState::ShowingImages) {
-            self.state = AppState::Loading("◌ Caricamento...".to_string());
+            self.state = AppState::Loading("Caricamento...".to_string());
             self.load_current_pair();
         }
     }

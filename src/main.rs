@@ -25,14 +25,12 @@ struct Args {
     #[arg(short, long, help = "Modalità batch (salta conferma per ogni file)")]
     batch: bool,
     
-    #[arg(short, long, help = "Modalità automatica (sceglie sempre la migliore qualità)")]
-    auto: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     
-    let (folder1, folder2, auto_mode, from_cli) = if args.folder1.is_none() || args.folder2.is_none() {
+    let (folder1, folder2, from_cli) = if args.folder1.is_none() || args.folder2.is_none() {
         println!("{}", "╔══════════════════════════════════════╗".bright_cyan());
         println!("{}", "║         PhotoScope v0.1.0            ║".bright_cyan());
         println!("{}", "║   Confronto e Selezione Immagini     ║".bright_cyan());
@@ -42,7 +40,7 @@ fn main() -> Result<()> {
         
         let selector = folder_selector::FolderSelectorApp::new();
         match selector.run()? {
-            Some((f1, f2, auto)) => (f1, f2, auto || args.auto, false),
+            Some((f1, f2)) => (f1, f2, false),
             None => {
                 println!("{} Operazione annullata dall'utente.", "✗".bright_red());
                 return Ok(());
@@ -51,7 +49,7 @@ fn main() -> Result<()> {
     } else {
         let f1 = args.folder1.unwrap();
         let f2 = args.folder2.unwrap();
-        (f1, f2, args.auto, true)
+        (f1, f2, true)
     };
     
     if from_cli {
@@ -83,7 +81,6 @@ fn main() -> Result<()> {
     let app = gui_v2::PhotoComparisonApp::new(
         matching_files,
         file_manager,
-        auto_mode,
     );
     
     let (selected_count, skipped_count) = app.run()?;
