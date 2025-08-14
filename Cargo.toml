@@ -17,5 +17,4 @@ sha2 = "0.10"
 anyhow = "1.0"
 
 [profile.release]
-# Uncomment the following lines to enable optimizations for release builds
 opt-level = 3
