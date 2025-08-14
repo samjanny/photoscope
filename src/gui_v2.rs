@@ -99,7 +99,7 @@ impl PhotoComparisonApp {
         
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_maximized(true)
+                .with_fullscreen(true)
                 .with_title("PhotoScope Pro - Image Comparison Tool")
                 .with_icon(Self::create_icon()),
             ..Default::default()
@@ -180,6 +180,8 @@ impl PhotoComparisonApp {
     }
     
     fn update(&mut self, ctx: &Context) {
+        // Non più necessario con fullscreen impostato nelle opzioni
+        
         self.animation_time += ctx.input(|i| i.unstable_dt);
         
         // Controlla se ci sono nuovi dati dal thread
@@ -258,7 +260,9 @@ impl PhotoComparisonApp {
     
     fn show_modern_images(&mut self, ui: &mut egui::Ui) {
         let available_width = ui.available_width();
-        let card_width = (available_width / 2.0) - 30.0;
+        // Calcolo corretto considerando tutti gli spazi: 15px sinistra + 20px centro + 15px destra
+        let total_spacing = 15.0 + 20.0 + 15.0;
+        let card_width = (available_width - total_spacing) / 2.0;
         
         let (analysis1, analysis2, texture1, texture2) = match (&self.current_analysis1, &self.current_analysis2) {
             (Some(a1), Some(a2)) => (a1.clone(), a2.clone(), self.texture1.clone(), self.texture2.clone()),
@@ -270,19 +274,59 @@ impl PhotoComparisonApp {
         let hover1 = self.hover_image1;
         let hover2 = self.hover_image2;
         
+        // Prima riga: le immagini affiancate
         ui.horizontal(|ui| {
+            ui.set_max_width(available_width);
             ui.add_space(15.0);
             
             // Immagine 1
-            self.show_image_card(ui, 1, analysis1, texture1, card_width, 
+            self.show_image_card(ui, 1, analysis1.clone(), texture1, card_width, 
                 hover1, quality_1_better);
             
             ui.add_space(20.0);
             
             // Immagine 2
-            self.show_image_card(ui, 2, analysis2, texture2, card_width,
+            self.show_image_card(ui, 2, analysis2.clone(), texture2, card_width,
                 hover2, quality_2_better);
+            
+            ui.add_space(15.0);
         });
+        
+        // Seconda riga: i metadati (se presenti) sotto le immagini
+        if !analysis1.exif_data.is_empty() || !analysis2.exif_data.is_empty() {
+            ui.add_space(8.0);
+            
+            ui.horizontal(|ui| {
+                ui.set_max_width(available_width);
+                ui.add_space(15.0);
+                
+                // Metadati immagine 1 (o spazio vuoto per allineamento)
+                ui.vertical(|ui| {
+                    ui.set_max_width(card_width);
+                    if !analysis1.exif_data.is_empty() {
+                        self.show_metadata_card(ui, &analysis1.exif_data, card_width);
+                    } else {
+                        // Spazio vuoto per mantenere allineamento
+                        ui.allocate_space(Vec2::new(card_width, 0.0));
+                    }
+                });
+                
+                ui.add_space(20.0);
+                
+                // Metadati immagine 2 (o spazio vuoto per allineamento)
+                ui.vertical(|ui| {
+                    ui.set_max_width(card_width);
+                    if !analysis2.exif_data.is_empty() {
+                        self.show_metadata_card(ui, &analysis2.exif_data, card_width);
+                    } else {
+                        // Spazio vuoto per mantenere allineamento
+                        ui.allocate_space(Vec2::new(card_width, 0.0));
+                    }
+                });
+                
+                ui.add_space(15.0);
+            });
+        }
     }
     
     fn show_image_card(&mut self, ui: &mut egui::Ui, 
@@ -316,32 +360,58 @@ impl PhotoComparisonApp {
                     // Header minimo della card
                     ui.horizontal(|ui| {
                         let color = if num == 1 { ACCENT_BLUE } else { ACCENT_ORANGE };
-                        ui.label(RichText::new(format!("[{}] {}", num,
-                            Path::new(&analysis.file_path)
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()))
-                            .size(14.0)
-                            .color(color));
+                        
+                        // Ottieni il nome del file
+                        let filename = Path::new(&analysis.file_path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        
+                        // Tronca il nome se troppo lungo
+                        let max_chars = 30;
+                        let display_name = if filename.len() > max_chars {
+                            format!("...{}", &filename[filename.len().saturating_sub(max_chars-3)..])
+                        } else {
+                            filename.to_string()
+                        };
+                        
+                        // Crea il label con troncamento
+                        let label_text = format!("[{}] {}", num, display_name);
+                        let label = egui::Label::new(
+                            RichText::new(label_text)
+                                .size(14.0)
+                                .color(color)
+                        ).truncate();
+                        
+                        let response = ui.add(label);
+                        
+                        // Mostra tooltip con nome completo se troncato
+                        if filename.len() > max_chars {
+                            response.on_hover_text(filename.to_string());
+                        }
                         
                         if is_best {
                             ui.label(RichText::new(format!(" {} MIGLIORE", regular::STAR)).color(ACCENT_GREEN).strong());
                         }
                     });
                     
-                    // Info compatte su una riga
-                    ui.label(RichText::new(format!("{:.1}MP | {:.1}MB | {} {}",
+                    // Info compatte su una riga con dimensioni e percentuale qualità
+                    ui.label(RichText::new(format!("{}×{} | {:.1}MP | {:.1}MB | {} ({}%) {}",
+                        analysis.width,
+                        analysis.height,
                         analysis.megapixels,
                         analysis.file_size_mb,
                         analysis.get_quality_stars(),
+                        analysis.quality_score,
                         if analysis.metadata_count > 0 { format!("| {} meta", analysis.metadata_count) } else { String::new() }
                     )).size(12.0).color(TEXT_SECONDARY));
                     
                     ui.add_space(4.0);
                     
-                    // Area immagine
-                    let image_height = 600.0; // Fixed height for consistent display
-                    let image_width = width - 20.0;
+                    // Area immagine - altezza fissa per tutte
+                    let image_height = 600.0;
+                    // Consideriamo i margini interni della card (16px * 2) e del frame immagine (8px * 2)
+                    let image_width = width - 32.0 - 16.0;
                     
                     Frame::NONE
                         .fill(Color32::from_gray(20))
@@ -386,6 +456,46 @@ impl PhotoComparisonApp {
         });
     }
     
+    
+    fn show_metadata_card(&self, ui: &mut egui::Ui, exif_data: &Vec<(String, String)>, width: f32) {
+        // Calcola l'altezza disponibile (usa lo spazio rimanente)
+        let available_height = ui.available_height() - 50.0; // Lascia spazio per margini
+        
+        Frame::NONE
+            .fill(CARD_BG)
+            .corner_radius(CornerRadius::same(12))
+            .stroke(Stroke::new(1.0, Color32::from_gray(50)))
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 2],
+                blur: 4,
+                spread: 0,
+                color: Color32::from_black_alpha(40),
+            })
+            .inner_margin(Margin::same(12))
+            .show(ui, |ui| {
+                ui.set_min_width(width - 24.0); // Considerando i margini
+                
+                ui.label(RichText::new("Metadati EXIF").size(13.0).color(TEXT_PRIMARY).strong());
+                ui.add_space(4.0);
+                
+                // Area scrollabile che usa tutto lo spazio disponibile
+                egui::ScrollArea::vertical()
+                    .max_height(available_height.max(100.0)) // Minimo 100px
+                    .show(ui, |ui| {
+                        for (key, value) in exif_data {
+                            let formatted_key = key.replace("(", "").replace(")", "");
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{}:", formatted_key))
+                                    .size(11.0)
+                                    .color(TEXT_SECONDARY));
+                                ui.label(RichText::new(value)
+                                    .size(11.0)
+                                    .color(TEXT_PRIMARY));
+                            });
+                        }
+                    });
+            });
+    }
     
     fn show_modern_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {

@@ -34,7 +34,7 @@ impl FolderSelectorApp {
     pub fn run(mut self) -> Result<Option<(PathBuf, PathBuf)>> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([900.0, 750.0])
+                .with_fullscreen(true)
                 .with_title("PhotoScope Pro - Setup"),
             ..Default::default()
         };
@@ -99,6 +99,8 @@ impl FolderSelectorApp {
     }
     
     fn update(&mut self, ctx: &egui::Context) {
+        // Non più necessario con fullscreen impostato nelle opzioni
+        
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(40.0);

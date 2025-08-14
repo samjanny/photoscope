@@ -44,7 +44,8 @@ impl ImageAnalysis {
             megapixels,
             metadata_count,
             &img,
-            is_lossless
+            is_lossless,
+            path
         );
         
         let hash = Self::calculate_file_hash(path)?;
@@ -85,55 +86,79 @@ impl ImageAnalysis {
     fn calculate_quality_score(
         file_size_mb: f64,
         megapixels: f64,
-        metadata_count: usize,
+        _metadata_count: usize,
         _img: &DynamicImage,
-        is_lossless: bool
+        is_lossless: bool,
+        path: &Path
     ) -> u8 {
-        let mut score = 0u8;
-        
-        // Risoluzione (peso maggiore per PNG)
-        if megapixels >= 24.0 {
-            score += 2;
+        // PESO 40%: Punteggio risoluzione (0-40 punti)
+        let resolution_score = if megapixels >= 48.0 {
+            40  // 48+ MP (8K e oltre)
+        } else if megapixels >= 24.0 {
+            35  // 24-48 MP (6K)
         } else if megapixels >= 12.0 {
-            score += 2;
-        } else if megapixels >= 6.0 {
-            score += 1;
+            30  // 12-24 MP (4K)
+        } else if megapixels >= 8.0 {
+            25  // 8-12 MP (3K)
+        } else if megapixels >= 5.0 {
+            20  // 5-8 MP (Full HD+)
         } else if megapixels >= 2.0 {
-            score += 1;
-        }
-        
-        // Dimensione file (importante per qualità)
-        if is_lossless {
-            // Per PNG, file più grandi indicano maggior informazione
-            if file_size_mb >= 10.0 {
-                score += 2;
-            } else if file_size_mb >= 5.0 {
-                score += 1;
-            } else if file_size_mb >= 1.0 {
-                score += 1;
-            }
+            15  // 2-5 MP (HD)
+        } else if megapixels >= 1.0 {
+            10  // 1-2 MP
         } else {
-            // Per JPEG, bilanciare dimensione
-            if file_size_mb >= 4.0 {
-                score += 1;
-            } else if file_size_mb >= 2.0 {
-                score += 1;
+            5   // <1 MP
+        };
+        
+        // PESO 60%: Punteggio qualità/compressione (0-60 punti)
+        let compression_score = if is_lossless {
+            60  // Formato lossless (PNG/TIFF/BMP): massima qualità
+        } else {
+            let extension = path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_lowercase())
+                .unwrap_or_default();
+                
+            if extension == "jpg" || extension == "jpeg" {
+                // Calcola bytes per pixel per stimare compressione JPEG
+                let total_pixels = megapixels * 1_000_000.0;
+                let total_bytes = file_size_mb * 1_024.0 * 1_024.0;
+                let bytes_per_pixel = total_bytes / total_pixels;
+                
+                // Mappa bytes/pixel a punteggio 0-60
+                if bytes_per_pixel >= 4.0 {
+                    60  // JPEG qualità ~100%
+                } else if bytes_per_pixel >= 3.0 {
+                    55  // JPEG qualità ~95%
+                } else if bytes_per_pixel >= 2.5 {
+                    50  // JPEG qualità ~90%
+                } else if bytes_per_pixel >= 2.0 {
+                    45  // JPEG qualità ~85%
+                } else if bytes_per_pixel >= 1.5 {
+                    40  // JPEG qualità ~75%
+                } else if bytes_per_pixel >= 1.2 {
+                    35  // JPEG qualità ~70%
+                } else if bytes_per_pixel >= 1.0 {
+                    30  // JPEG qualità ~60%
+                } else if bytes_per_pixel >= 0.7 {
+                    25  // JPEG qualità ~50%
+                } else if bytes_per_pixel >= 0.5 {
+                    20  // JPEG qualità ~40%
+                } else if bytes_per_pixel >= 0.4 {
+                    15  // JPEG qualità ~35%
+                } else if bytes_per_pixel >= 0.3 {
+                    10  // JPEG qualità ~30%
+                } else {
+                    5   // JPEG qualità <30%
+                }
+            } else {
+                // Altri formati: punteggio medio
+                30
             }
-        }
+        };
         
-        // Bonus per formato senza perdita
-        if is_lossless {
-            score += 1;
-        }
-        
-        // Metadata (peso ridotto)
-        if metadata_count >= 15 {
-            score += 1;
-        } else if metadata_count >= 5 {
-            score += 1;
-        }
-        
-        score.min(5)
+        // Punteggio totale: 40% risoluzione + 60% qualità/compressione
+        (resolution_score + compression_score).min(100)
     }
     
     fn calculate_file_hash(path: &Path) -> Result<String> {
@@ -153,8 +178,11 @@ impl ImageAnalysis {
     }
     
     pub fn get_quality_stars(&self) -> String {
-        let filled = "★".repeat(self.quality_score as usize);
-        let empty = "☆".repeat(5 - self.quality_score as usize);
+        // Converti da scala 0-100 a 0-5 stelle
+        let stars = ((self.quality_score as f32 / 100.0) * 5.0).round() as usize;
+        let stars = stars.min(5); // Assicura che non superi 5 stelle
+        let filled = "★".repeat(stars);
+        let empty = "☆".repeat(5 - stars);
         format!("{}{}", filled, empty)
     }
     
