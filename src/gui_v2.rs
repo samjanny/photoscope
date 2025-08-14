@@ -458,8 +458,15 @@ impl PhotoComparisonApp {
     
     
     fn show_metadata_card(&self, ui: &mut egui::Ui, exif_data: &Vec<(String, String)>, width: f32) {
-        // Calcola l'altezza disponibile (usa lo spazio rimanente)
-        let available_height = ui.available_height() - 50.0; // Lascia spazio per margini
+        // Calcola l'altezza disponibile
+        let available_height = ui.available_height();
+        
+        // Usa un'altezza fissa se lo spazio disponibile è troppo piccolo
+        let card_height = if available_height > 200.0 {
+            available_height - 10.0
+        } else {
+            200.0 // Altezza minima garantita
+        };
         
         Frame::NONE
             .fill(CARD_BG)
@@ -473,26 +480,40 @@ impl PhotoComparisonApp {
             })
             .inner_margin(Margin::same(12))
             .show(ui, |ui| {
-                ui.set_min_width(width - 24.0); // Considerando i margini
+                ui.set_min_width(width - 24.0);
+                ui.set_max_width(width - 24.0);
+                ui.set_min_height(card_height - 24.0);
                 
+                // Titolo
                 ui.label(RichText::new("Metadati EXIF").size(13.0).color(TEXT_PRIMARY).strong());
                 ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
                 
-                // Area scrollabile che usa tutto lo spazio disponibile
+                // Area scrollabile per i metadati
+                let scroll_height = (card_height - 60.0).max(100.0);
                 egui::ScrollArea::vertical()
-                    .max_height(available_height.max(100.0)) // Minimo 100px
+                    .max_height(scroll_height)
+                    .auto_shrink([false, false]) // Impedisce lo shrink automatico
                     .show(ui, |ui| {
                         for (key, value) in exif_data {
                             let formatted_key = key.replace("(", "").replace(")", "");
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(format!("{}:", formatted_key))
-                                    .size(11.0)
-                                    .color(TEXT_SECONDARY));
+                                // Usa una larghezza fissa per la chiave per allineamento
+                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                                    ui.set_min_width(150.0);
+                                    ui.label(RichText::new(format!("{}:", formatted_key))
+                                        .size(11.0)
+                                        .color(TEXT_SECONDARY));
+                                });
                                 ui.label(RichText::new(value)
                                     .size(11.0)
                                     .color(TEXT_PRIMARY));
                             });
                         }
+                        
+                        // Aggiungi un po' di spazio alla fine per miglior leggibilità
+                        ui.add_space(10.0);
                     });
             });
     }
