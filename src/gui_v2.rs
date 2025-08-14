@@ -62,6 +62,10 @@ pub struct PhotoComparisonApp {
     hover_image1: bool,
     hover_image2: bool,
     animation_time: f32,
+    
+    // Metadata transfer state
+    metadata_transfer_source: Option<PathBuf>,
+    metadata_transfer_pending: bool,
 }
 
 impl PhotoComparisonApp {
@@ -86,6 +90,8 @@ impl PhotoComparisonApp {
             hover_image1: false,
             hover_image2: false,
             animation_time: 0.0,
+            metadata_transfer_source: None,
+            metadata_transfer_pending: false,
         }
     }
     
@@ -255,6 +261,15 @@ impl PhotoComparisonApp {
                 regular::ARROW_RIGHT,
                 *self.skipped_count.lock().unwrap(),
                 self.all_pairs.len())).size(14.0).color(TEXT_SECONDARY));
+            
+            // Show metadata transfer indicator if pending
+            if self.metadata_transfer_pending {
+                ui.separator();
+                ui.label(RichText::new(format!("{} Metadati pronti per trasferimento", regular::SWAP))
+                    .size(14.0)
+                    .color(ACCENT_GREEN)
+                    .strong());
+            }
         });
     }
     
@@ -390,7 +405,15 @@ impl PhotoComparisonApp {
                             response.on_hover_text(filename.to_string());
                         }
                         
-                        if is_best {
+                        // Check if this image is the metadata source
+                        let is_metadata_source = self.metadata_transfer_pending && 
+                            self.metadata_transfer_source.as_ref()
+                                .map(|p| p == Path::new(&analysis.file_path))
+                                .unwrap_or(false);
+                        
+                        if is_metadata_source {
+                            ui.label(RichText::new(format!(" {} META SORGENTE", regular::DATABASE)).color(ACCENT_GREEN).strong());
+                        } else if is_best {
                             ui.label(RichText::new(format!(" {} MIGLIORE", regular::STAR)).color(ACCENT_GREEN).strong());
                         }
                     });
@@ -535,13 +558,17 @@ impl PhotoComparisonApp {
                 self.skip_current();
             }
             
+            if self.modern_button(ui, &format!("{} Trasferisci Meta", regular::SWAP), ACCENT_GREEN, btn_size) {
+                self.transfer_metadata();
+            }
+            
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.modern_button(ui, &format!("{} Esci", regular::X), DANGER_RED, btn_size) {
                     self.exit_program = true;
                 }
                 
                 // Shortcuts help compatto
-                ui.label(RichText::new(format!("{} 1, 2, S, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
+                ui.label(RichText::new(format!("{} 1, 2, S, T, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
             });
         });
     }
@@ -600,6 +627,9 @@ impl PhotoComparisonApp {
         if ctx.input(|i| i.key_pressed(egui::Key::S)) {
             self.skip_current();
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::T)) {
+            self.transfer_metadata();
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.exit_program = true;
         }
@@ -623,9 +653,21 @@ impl PhotoComparisonApp {
         let pairs = self.all_pairs.clone();
         let next_index = self.current_index + 1;
         
+        // Check if there's pending metadata transfer
+        let metadata_source = if self.metadata_transfer_pending {
+            self.metadata_transfer_source.clone()
+        } else {
+            None
+        };
+        
+        // Clear metadata transfer state after using it
+        self.metadata_transfer_pending = false;
+        self.metadata_transfer_source = None;
+        
         thread::spawn(move || {
-            if let Ok(_dest) = file_manager.copy_to_output(&path) {
-                // Successo copia
+            // Copy to output with optional metadata transfer
+            if let Ok(_dest) = file_manager.copy_to_output_with_metadata(&path, metadata_source.as_deref()) {
+                // Successo copia (e eventuale trasferimento metadati)
             }
             
             if next_index < pairs.len() {
@@ -708,5 +750,65 @@ impl PhotoComparisonApp {
             color_image,
             egui::TextureOptions::default()
         ))
+    }
+    
+    fn transfer_metadata(&mut self) {
+        // Get the current pair of files
+        if let Some((path1, path2)) = self.all_pairs.get(self.current_index) {
+            // Determine which image has more metadata
+            let metadata_count_1 = self.current_analysis1.as_ref().map(|a| a.metadata_count).unwrap_or(0);
+            let metadata_count_2 = self.current_analysis2.as_ref().map(|a| a.metadata_count).unwrap_or(0);
+            
+            if metadata_count_1 > metadata_count_2 {
+                self.metadata_transfer_source = Some(path1.clone());
+                self.metadata_transfer_pending = true;
+                self.state = AppState::Loading(format!(
+                    "Metadati marcati per trasferimento: immagine 1 ({} meta) → immagine selezionata", 
+                    metadata_count_1
+                ));
+            } else if metadata_count_2 > metadata_count_1 {
+                self.metadata_transfer_source = Some(path2.clone());
+                self.metadata_transfer_pending = true;
+                self.state = AppState::Loading(format!(
+                    "Metadati marcati per trasferimento: immagine 2 ({} meta) → immagine selezionata", 
+                    metadata_count_2
+                ));
+            } else if metadata_count_1 > 0 {
+                // If both have same metadata count (and not zero), don't transfer
+                self.state = AppState::Loading("Entrambe le immagini hanno già lo stesso numero di metadati".to_string());
+                self.metadata_transfer_pending = false;
+                self.metadata_transfer_source = None;
+            } else {
+                // Both have no metadata
+                self.state = AppState::Loading("Nessuna immagine ha metadati da trasferire".to_string());
+                self.metadata_transfer_pending = false;
+                self.metadata_transfer_source = None;
+            }
+            
+            // Show the state briefly, then return to showing images
+            let next_data = self.next_data.clone();
+            let pairs = self.all_pairs.clone();
+            let current_index = self.current_index;
+            
+            thread::spawn(move || {
+                // Wait a bit to show the message
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                
+                // Reload current pair to go back to showing images
+                if let Some((path1, path2)) = pairs.get(current_index) {
+                    if let (Ok(a1), Ok(a2)) = (
+                        ImageAnalysis::analyze_image(path1),
+                        ImageAnalysis::analyze_image(path2)
+                    ) {
+                        if let (Ok(img1), Ok(img2)) = (
+                            PhotoComparisonApp::load_and_resize_image(path1),
+                            PhotoComparisonApp::load_and_resize_image(path2)
+                        ) {
+                            *next_data.lock().unwrap() = Some((a1, a2, img1, img2));
+                        }
+                    }
+                }
+            });
+        }
     }
 }

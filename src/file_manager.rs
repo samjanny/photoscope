@@ -139,4 +139,45 @@ impl FileManager {
             path.display().to_string()
         }
     }
+    
+    pub fn copy_to_output_with_metadata(&self, source_path: &Path, metadata_source: Option<&Path>) -> Result<PathBuf> {
+        // First, copy the file normally
+        let dest_path = self.copy_to_output(source_path)?;
+        
+        // If there's a metadata source, apply metadata to the OUTPUT file
+        if let Some(meta_source) = metadata_source {
+            println!("Applicazione metadati da {:?} al file di output {:?}", meta_source, dest_path);
+            
+            // Use exiftool to copy metadata from source to the OUTPUT file
+            let output = std::process::Command::new("exiftool")
+                .args(&[
+                    "-overwrite_original",
+                    "-TagsFromFile",
+                    meta_source.to_str().unwrap(),
+                    "-all:all",
+                    dest_path.to_str().unwrap()
+                ])
+                .output();
+            
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        println!("Metadati trasferiti con successo al file di output!");
+                    } else {
+                        eprintln!("Errore exiftool: {}", String::from_utf8_lossy(&result.stderr));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Impossibile eseguire exiftool: {}.", e);
+                    eprintln!("I metadati non sono stati trasferiti, ma il file è stato copiato.");
+                    eprintln!("Per utilizzare questa funzione, installa exiftool:");
+                    eprintln!("  Ubuntu/Debian: sudo apt install libimage-exiftool-perl");
+                    eprintln!("  Fedora: sudo dnf install perl-Image-ExifTool");
+                    eprintln!("  macOS: brew install exiftool");
+                }
+            }
+        }
+        
+        Ok(dest_path)
+    }
 }
