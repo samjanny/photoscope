@@ -546,19 +546,19 @@ impl PhotoComparisonApp {
             // Pulsanti principali compatti
             let btn_size = Vec2::new(120.0, 35.0);
             
-            if self.modern_button(ui, &format!("{} Scegli Prima", regular::NUMBER_CIRCLE_ONE), ACCENT_BLUE, btn_size) {
+            if self.modern_button(ui, &format!("{} Prima (A)", regular::ARROW_LEFT), ACCENT_BLUE, btn_size) {
                 self.make_choice(1);
             }
             
-            if self.modern_button(ui, &format!("{} Scegli Seconda", regular::NUMBER_CIRCLE_TWO), ACCENT_ORANGE, btn_size) {
+            if self.modern_button(ui, &format!("{} Seconda (D)", regular::ARROW_RIGHT), ACCENT_ORANGE, btn_size) {
                 self.make_choice(2);
             }
             
-            if self.modern_button(ui, &format!("{} Salta", regular::SKIP_FORWARD), TEXT_SECONDARY, btn_size) {
+            if self.modern_button(ui, &format!("{} Salta (S)", regular::ARROW_DOWN), TEXT_SECONDARY, btn_size) {
                 self.skip_current();
             }
             
-            if self.modern_button(ui, &format!("{} Trasferisci Meta", regular::SWAP), ACCENT_GREEN, btn_size) {
+            if self.modern_button(ui, &format!("{} Meta (W)", regular::ARROW_UP), ACCENT_GREEN, btn_size) {
                 self.transfer_metadata();
             }
             
@@ -568,7 +568,7 @@ impl PhotoComparisonApp {
                 }
                 
                 // Shortcuts help compatto
-                ui.label(RichText::new(format!("{} 1, 2, S, T, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
+                ui.label(RichText::new(format!("{} A, D, S, W, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
             });
         });
     }
@@ -618,16 +618,16 @@ impl PhotoComparisonApp {
     }
     
     fn handle_keyboard_input(&mut self, ctx: &Context) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::A)) {
             self.make_choice(1);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::D)) {
             self.make_choice(2);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::S)) {
             self.skip_current();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::T)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::W)) {
             self.transfer_metadata();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
