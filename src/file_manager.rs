@@ -180,4 +180,13 @@ impl FileManager {
         
         Ok(dest_path)
     }
+    
+    pub fn delete_from_output(&self, file_path: &Path) -> Result<()> {
+        if file_path.exists() {
+            fs::remove_file(file_path)
+                .with_context(|| format!("Failed to delete file from output: {:?}", file_path))?;
+            println!("File eliminato dall'output: {:?}", file_path);
+        }
+        Ok(())
+    }
 }
