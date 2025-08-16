@@ -691,8 +691,25 @@ impl PhotoComparisonApp {
         
         // Copy file synchronously first to get the destination path
         let copied_file_path = if let Ok(dest_path) = file_manager.copy_to_output_with_metadata(&path, metadata_source.as_deref()) {
+            println!("DEBUG: File copiato con successo all'indice {}: {:?}", self.current_index, dest_path);
+            
+            // Force filesystem sync to ensure file is written
+            if let Err(e) = std::process::Command::new("sync").output() {
+                println!("DEBUG: Impossibile eseguire sync: {}", e);
+            } else {
+                println!("DEBUG: Sync filesystem completato");
+            }
+            
+            // Additional verification that file exists
+            if dest_path.exists() {
+                println!("DEBUG: Verifica esistenza file post-sync: OK");
+            } else {
+                println!("DEBUG: ATTENZIONE: File non trovato dopo sync!");
+            }
+            
             Some(dest_path)
         } else {
+            println!("DEBUG: Errore nella copia del file all'indice {}", self.current_index);
             None
         };
         
@@ -700,7 +717,9 @@ impl PhotoComparisonApp {
         while self.copied_files.len() <= self.current_index {
             self.copied_files.push(None);
         }
-        self.copied_files[self.current_index] = copied_file_path;
+        self.copied_files[self.current_index] = copied_file_path.clone();
+        
+        println!("DEBUG: Salvato in copied_files[{}]: {:?}", self.current_index, copied_file_path);
         
         thread::spawn(move || {
             
@@ -847,17 +866,28 @@ impl PhotoComparisonApp {
     }
     
     fn go_to_previous(&mut self) {
+        println!("DEBUG: go_to_previous chiamato");
+        
         // Check if we have history to go back to
         if let Some(previous_index) = self.navigation_history.pop() {
-            // Check if there was a file copied from the current index that needs to be deleted
-            if self.current_index < self.copied_files.len() {
-                if let Some(copied_file_path) = &self.copied_files[self.current_index] {
+            println!("DEBUG: Going back from index {} to index {}", self.current_index, previous_index);
+            println!("DEBUG: copied_files.len() = {}", self.copied_files.len());
+            
+            // Check if there was a file copied from the previous index that needs to be deleted
+            if previous_index < self.copied_files.len() {
+                println!("DEBUG: Controllo copied_files[{}] (previous_index)", previous_index);
+                
+                if let Some(copied_file_path) = &self.copied_files[previous_index] {
+                    println!("DEBUG: Tentativo di cancellazione file: {:?}", copied_file_path);
+                    
                     // Delete the file from output
                     if let Err(e) = self.file_manager.delete_from_output(copied_file_path) {
                         eprintln!("Errore durante la cancellazione del file: {}", e);
+                    } else {
+                        println!("DEBUG: File cancellato con successo");
                     }
                     // Mark as no longer copied
-                    self.copied_files[self.current_index] = None;
+                    self.copied_files[previous_index] = None;
                     
                     // Decrease selected count since we undid a selection
                     let selected = self.selected_count.lock().unwrap();
@@ -866,6 +896,7 @@ impl PhotoComparisonApp {
                         *self.selected_count.lock().unwrap() -= 1;
                     }
                 } else {
+                    println!("DEBUG: copied_files[{}] è None (era uno skip)", previous_index);
                     // This was a skip, decrease skip count
                     let skipped = self.skipped_count.lock().unwrap();
                     if *skipped > 0 {
@@ -873,6 +904,9 @@ impl PhotoComparisonApp {
                         *self.skipped_count.lock().unwrap() -= 1;
                     }
                 }
+            } else {
+                println!("DEBUG: previous_index {} >= copied_files.len() {}, nessun controllo possibile", 
+                    previous_index, self.copied_files.len());
             }
             
             // Update the current index
@@ -885,6 +919,8 @@ impl PhotoComparisonApp {
             // Load the previous pair
             self.state = AppState::Loading("Caricamento coppia precedente...".to_string());
             self.load_current_pair();
+        } else {
+            println!("DEBUG: Nessuna storia disponibile per tornare indietro");
         }
     }
 }

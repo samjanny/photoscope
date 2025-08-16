@@ -182,11 +182,57 @@ impl FileManager {
     }
     
     pub fn delete_from_output(&self, file_path: &Path) -> Result<()> {
-        if file_path.exists() {
-            fs::remove_file(file_path)
-                .with_context(|| format!("Failed to delete file from output: {:?}", file_path))?;
-            println!("File eliminato dall'output: {:?}", file_path);
+        println!("DEBUG: Tentativo di cancellazione file: {:?}", file_path);
+        
+        // Try multiple times with sync between attempts
+        for attempt in 1..=3 {
+            println!("DEBUG: Tentativo {}/3", attempt);
+            
+            // Force sync before checking
+            if let Err(e) = std::process::Command::new("sync").output() {
+                println!("DEBUG: Impossibile eseguire sync: {}", e);
+            }
+            
+            println!("DEBUG: File esiste? {}", file_path.exists());
+            
+            if file_path.exists() {
+                match fs::remove_file(file_path) {
+                    Ok(_) => {
+                        println!("DEBUG: File eliminato dall'output: {:?}", file_path);
+                        
+                        // Force sync after deletion
+                        if let Err(e) = std::process::Command::new("sync").output() {
+                            println!("DEBUG: Impossibile eseguire sync post-cancellazione: {}", e);
+                        }
+                        
+                        // Verify deletion
+                        if file_path.exists() {
+                            println!("WARNING: File still exists after deletion attempt {}!", attempt);
+                            if attempt < 3 {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                continue;
+                            }
+                        } else {
+                            println!("DEBUG: Deletion confirmed - file no longer exists");
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        println!("DEBUG: Errore durante cancellazione tentativo {}: {}", attempt, e);
+                        if attempt < 3 {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            continue;
+                        } else {
+                            return Err(anyhow::anyhow!("Failed to delete file after {} attempts: {}", attempt, e));
+                        }
+                    }
+                }
+            } else {
+                println!("DEBUG: File non trovato al tentativo {}, impossibile cancellare: {:?}", attempt, file_path);
+                return Ok(());
+            }
         }
+        
         Ok(())
     }
 }
