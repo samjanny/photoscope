@@ -66,6 +66,9 @@ pub struct PhotoComparisonApp {
     // Metadata transfer state
     metadata_transfer_source: Option<PathBuf>,
     metadata_transfer_pending: bool,
+    
+    // Navigation history
+    navigation_history: Vec<usize>,
 }
 
 impl PhotoComparisonApp {
@@ -92,6 +95,7 @@ impl PhotoComparisonApp {
             animation_time: 0.0,
             metadata_transfer_source: None,
             metadata_transfer_pending: false,
+            navigation_history: Vec::new(),
         }
     }
     
@@ -550,6 +554,10 @@ impl PhotoComparisonApp {
                 self.make_choice(1);
             }
             
+            if self.modern_button(ui, &format!("{} Previous (P)", regular::ARROW_U_UP_LEFT), TEXT_SECONDARY, btn_size) {
+                self.go_to_previous();
+            }
+            
             if self.modern_button(ui, &format!("{} Seconda (D)", regular::ARROW_RIGHT), ACCENT_ORANGE, btn_size) {
                 self.make_choice(2);
             }
@@ -568,7 +576,7 @@ impl PhotoComparisonApp {
                 }
                 
                 // Shortcuts help compatto
-                ui.label(RichText::new(format!("{} A, D, S, W, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
+                ui.label(RichText::new(format!("{} A, D, S, W, P, ESC", regular::KEYBOARD)).size(12.0).color(TEXT_SECONDARY));
             });
         });
     }
@@ -627,6 +635,9 @@ impl PhotoComparisonApp {
         if ctx.input(|i| i.key_pressed(egui::Key::S)) {
             self.skip_current();
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::P)) {
+            self.go_to_previous();
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::W)) {
             self.transfer_metadata();
         }
@@ -637,12 +648,16 @@ impl PhotoComparisonApp {
     
     fn make_choice(&mut self, choice: u8) {
         if let Some((path1, path2)) = self.all_pairs.get(self.current_index) {
+            // Save current index to history before moving forward
+            self.navigation_history.push(self.current_index);
             let path = if choice == 1 { path1.clone() } else { path2.clone() };
             self.state = AppState::ProcessingChoice(choice, path);
         }
     }
     
     fn skip_current(&mut self) {
+        // Save current index to history before skipping
+        self.navigation_history.push(self.current_index);
         *self.skipped_count.lock().unwrap() += 1;
         self.move_to_next();
     }
@@ -809,6 +824,34 @@ impl PhotoComparisonApp {
                     }
                 }
             });
+        }
+    }
+    
+    fn go_to_previous(&mut self) {
+        // Check if we have history to go back to
+        if let Some(previous_index) = self.navigation_history.pop() {
+            // Decrease counters as we're undoing the last action
+            if self.current_index > previous_index {
+                // We moved forward, so we need to undo either a selection or skip
+                // Note: we can't determine which one exactly without more state tracking,
+                // but we'll decrease selected count as it's more common
+                let selected = self.selected_count.lock().unwrap();
+                if *selected > 0 {
+                    drop(selected);
+                    *self.selected_count.lock().unwrap() -= 1;
+                }
+            }
+            
+            // Update the current index
+            self.current_index = previous_index;
+            
+            // Clear any pending metadata transfer
+            self.metadata_transfer_pending = false;
+            self.metadata_transfer_source = None;
+            
+            // Load the previous pair
+            self.state = AppState::Loading("Caricamento coppia precedente...".to_string());
+            self.load_current_pair();
         }
     }
 }
